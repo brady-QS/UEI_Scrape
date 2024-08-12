@@ -1,0 +1,37 @@
+import requests
+import pandas as pd
+
+# Read the CSV file
+df = pd.read_csv('SpendingUEIsample.csv')
+
+def get_recipient_info(company_name):
+    url = "https://api.usaspending.gov/api/v2/autocomplete/recipient/"
+    data = {"search_text": company_name}
+    try:
+        response = requests.post(url, json=data)
+        response.raise_for_status()  # Raise an exception for bad status codes
+        data = response.json()
+        if "results" in data:
+            parent_ueis = []
+            for result in data["results"]:
+                if result["uei"] is not None and result["recipient_level"] == "P":
+                    parent_ueis.append({
+                        "Search Term": company_name,
+                        "Parent Name": result["recipient_name"],
+                        "UEI": result["uei"]
+                    })
+            return parent_ueis
+    except requests.exceptions.RequestException as e:
+        print(f"An error occurred: {e}")
+    return None
+
+# Create a new column for the UEI numbers
+df["Parent UEIs"] = df["Company Name"].apply(get_recipient_info)
+
+# Flatten the list of dictionaries into a dataframe
+parent_ueis_df = pd.concat([pd.json_normalize(result) for result in df["Parent UEIs"]], ignore_index=True)
+
+# Save the dataframe to a new CSV file
+parent_ueis_df.to_csv('parent_ueis_output.csv', index=False)
+
+print("Output saved to parent_ueis_output.csv")
