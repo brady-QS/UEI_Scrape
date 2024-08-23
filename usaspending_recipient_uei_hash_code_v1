@@ -1,0 +1,66 @@
+import requests
+import pandas as pd
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Read the CSV file
+df = pd.read_csv('usaspending_uei_hash_sample_a_input_v0.csv')
+total_companies = len(df)
+logger.info(f'Loaded CSV file with {total_companies} companies')
+
+def get_recipient_info(company_name):
+    url = "https://api.usaspending.gov/api/v2/autocomplete/recipient/"
+    data = {"search_text": company_name}
+    try:
+        response = requests.post(url, json=data)
+        response.raise_for_status()
+        results = response.json().get("results", [])
+        return [
+            {"Search Term": company_name, "Parent Name": r["recipient_name"], "UEI": r["uei"]}
+            for r in results if r["uei"] and r["recipient_level"] == "P"
+        ]
+    except requests.exceptions.RequestException as e:
+        logger.error(f'Error getting recipient info for {company_name}: {e}')
+        return []
+
+# Get Parent UEIs for each company
+df["Parent UEIs"] = df["Company Name"].apply(get_recipient_info)
+logger.info('Created Parent UEIs column')
+
+recipient_info_list = []
+
+# Process each company with a counter
+for index, row in df.iterrows():
+    print(f"Processing Company {index + 1} out of {total_companies}...")
+    recipient_info_list.extend(row["Parent UEIs"])
+    print(f"Company {index + 1} complete.")
+
+logger.info('Finished processing companies')
+
+# Create a dataframe from the recipient info list
+parent_ueis_df = pd.DataFrame(recipient_info_list)
+logger.info('Created parent_ueis_df dataframe')
+
+def get_company_hash(row):
+    url = "https://api.usaspending.gov/api/v2/recipient/"
+    data = {"keyword": row["UEI"], "award_type": "all"}
+    try:
+        response = requests.post(url, json=data)
+        response.raise_for_status()
+        results = response.json().get("results", [])
+        return results[0]["id"] if results else None
+    except requests.exceptions.RequestException as e:
+        logger.error(f'Error getting company hash for UEI {row["UEI"]}: {e}')
+        return None
+
+# Add company hash values to the dataframe with a counter
+for index, row in parent_ueis_df.iterrows():
+    print(f"Processing UEI {index + 1} out of {len(parent_ueis_df)}...")
+    parent_ueis_df.loc[index, "Company Hash"] = get_company_hash(row)
+    print(f"UEI {index + 1} complete.")
+
+logger.info('Finished processing UEIs and saving output')
+parent_ueis_df.to_csv('usaspending_parent_ueis_hash_output_v0.csv', index=False)
