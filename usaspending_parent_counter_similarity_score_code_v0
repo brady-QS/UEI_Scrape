@@ -1,0 +1,48 @@
+import requests
+import pandas as pd
+import difflib
+from tqdm import tqdm
+
+# Load your CSV file with company names
+input_file = 'qs_commercial_companies_list_usaspending_input_sample_v1.csv'
+output_file = 'usaspending_parent_ueis_hash_output_v4.csv'
+
+df = pd.read_csv(input_file)
+
+# Add columns for USASpending.gov results
+df['Parent Name'] = ''
+df['Similarity Score'] = 0.0
+
+# Function to compute similarity score
+def similarity_score(name1, name2):
+    return difflib.SequenceMatcher(None, name1, name2).ratio()
+
+# Function to query USASpending API
+def query_usaspending(company_name):
+    url = 'https://api.usaspending.gov/api/v2/autocomplete/recipient/'
+    params = {'q': company_name}
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        return None
+
+# Iterate through the company names and match against USASpending.gov
+for idx, row in tqdm(df.iterrows(), total=df.shape[0], desc="Processing Companies"):
+    company_name = row['Name']
+    api_response = query_usaspending(company_name)
+    
+    if api_response and 'results' in api_response:
+        # Extract the first result's name from the API response
+        if api_response['results']:
+            parent_name = api_response['results'][0]['recipient_name']
+            score = similarity_score(company_name, parent_name)
+            
+            # Update the DataFrame
+            df.at[idx, 'Parent Name'] = parent_name
+            df.at[idx, 'Similarity Score'] = score
+
+# Save the updated DataFrame to a new CSV file
+df.to_csv(output_file, index=False)
+
+print(f"Results saved to {output_file}")
