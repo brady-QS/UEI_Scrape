@@ -1,0 +1,88 @@
+# Updated code
+## Combines BA and ROS code
+## BA: Retained API Endpoint interaction (requests.post()) to retrieve USASpending.gov's Parent Name, UEI, and hash (P/C)
+## ROS: Retained Similarity Score and `tqdm` user-friendly script progress tracker
+
+## combined Brady's script with my most recent script
+## changes: went with the Brady's script for API interaction
+## retained the similarity score and tqdm progress tracker from my script
+
+import requests
+import pandas as pd
+import difflib
+from tqdm import tqdm
+
+# Load your CSV file with company names
+input_file = 'qs_commercial_companies_list_usaspending_input_sample_v1.csv'
+output_file = 'usaspending_parent_ueis_hash_output_v2.csv'
+
+df = pd.read_csv(input_file)
+
+# Add columns for USASpending.gov results
+df['Parent Name'] = ''
+df['UEI'] = ''
+df['Company Hash'] = ''
+df['Similarity Score'] = 0.0
+
+# Function to get the closest match
+def get_closest_match(name, choices):
+    return difflib.get_close_matches(name, choices, n=1, cutoff=0.0)[0] if choices else None
+
+# Function to compute similarity score
+def similarity_score(name1, name2):
+    return difflib.SequenceMatcher(None, name1, name2).ratio()
+
+# Function to query USASpending API for Parent UEI and Company Hash
+def get_recipient_info(company_name):
+    url = "https://api.usaspending.gov/api/v2/autocomplete/recipient/"
+    data = {"search_text": company_name}
+    try:
+        response = requests.post(url, json=data)
+        response.raise_for_status()
+        results = response.json().get("results", [])
+        return [
+            {"recipient_name": r["recipient_name"], "uei": r["uei"], "hash": None} 
+            for r in results if r["uei"] and r["recipient_level"] == "P"
+        ]
+    except requests.exceptions.RequestException:
+        return []
+
+# Function to query USASpending API for the Company Hash using UEI
+def get_company_hash(uei):
+    url = "https://api.usaspending.gov/api/v2/recipient/"
+    data = {"keyword": uei, "award_type": "all"}
+    try:
+        response = requests.post(url, json=data)
+        response.raise_for_status()
+        results = response.json().get("results", [])
+        return results[0]["id"] if results else None
+    except requests.exceptions.RequestException:
+        return None
+
+# Iterate through the company names and match against USASpending.gov
+for idx, row in tqdm(df.iterrows(), total=df.shape[0], desc="Processing Companies"):
+    company_name = row['Name']
+    recipient_info = get_recipient_info(company_name)
+    
+    if recipient_info:
+        # Extract relevant information and find the closest match
+        possible_names = [info['recipient_name'] for info in recipient_info]
+        matched_name = get_closest_match(company_name, possible_names)
+        
+        if matched_name:
+            matched_record = next(item for item in recipient_info if item['recipient_name'] == matched_name)
+            matched_record["hash"] = get_company_hash(matched_record['uei'])
+            score = similarity_score(company_name, matched_record['recipient_name'])
+            
+            # Update the DataFrame with retrieved information
+            df.at[idx, 'Parent Name'] = matched_record['recipient_name']
+            df.at[idx, 'UEI'] = matched_record['uei']
+            df.at[idx, 'Company Hash'] = matched_record['hash']
+            df.at[idx, 'Similarity Score'] = score
+
+# Save the updated DataFrame to a new CSV file
+df.to_csv(output_file, index=False)
+
+print(f"Results saved to {output_file}")
+
+## 8.25.2024 Results: Returned sample of 20 companies in 11 minutes with accurate records. Returned blanks for companies that are not logged by USASpending.gov.
